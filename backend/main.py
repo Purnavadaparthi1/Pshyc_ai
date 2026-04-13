@@ -43,15 +43,21 @@ def build_frontend():
         return
 
     logger.info("Building React frontend (npm run build)…")
-    result = subprocess.run(
-        ["npm", "run", "build"],
-        cwd=str(FRONTEND_SRC),
-        capture_output=False,
-    )
-    if result.returncode != 0:
-        logger.error("Frontend build failed! Run manually: cd frontend && npm run build")
-        sys.exit(1)
-    logger.info("Frontend build complete.")
+    try:
+        result = subprocess.run(
+            ["npm", "run", "build"],
+            cwd=str(FRONTEND_SRC),
+            capture_output=False,
+        )
+        if result.returncode != 0:
+            logger.error("Frontend build failed! Run manually: cd frontend && npm run build")
+            sys.exit(1)
+        logger.info("Frontend build complete.")
+    except FileNotFoundError:
+        logger.warning(
+            "npm not found. Frontend build skipped. "
+            "Install Node.js or run: cd frontend && npm install && npm run build"
+        )
 
 
 def bootstrap_knowledge_base():
@@ -105,12 +111,19 @@ async def lifespan(app: FastAPI):
     # Build frontend (no-op if already built)
     build_frontend()
 
-    # Pre-warm RAG and Gemini singletons
-    RAGPipeline.get_instance()
+    # Pre-warm Gemini singleton
     GeminiAgent.get_instance()
-
-    # Auto-generate + ingest knowledge base on first run
-    bootstrap_knowledge_base()
+    
+    # Pre-warm RAG if available
+    if RAGPipeline is not None:
+        try:
+            RAGPipeline.get_instance()
+            # Auto-generate + ingest knowledge base on first run
+            bootstrap_knowledge_base()
+        except Exception as e:
+            logger.warning(f"RAG initialization failed: {e}")
+    else:
+        logger.warning("chromadb not installed — RAG features disabled")
 
     logger.info("PSYCH.AI is ready  →  http://localhost:8000")
     yield

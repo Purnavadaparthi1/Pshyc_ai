@@ -1,17 +1,17 @@
-fastapi==0.115.0
-uvicorn[standard]==0.30.6
-pydantic==2.7.4
-pydantic-settings==2.3.4
+fastapi>=0.100.0
+uvicorn[standard]>=0.28.0
+pydantic>=2.5.0
+pydantic-settings>=2.0.0
 
 # AI / RAG
-google-generativeai==0.7.2
-chromadb==0.5.5
-sentence-transformers==3.0.1
+google-generativeai>=0.4.0
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
 
 # PDF processing and generation
-pypdf==4.3.1
-reportlab==4.2.2
+pypdf>=4.0.0
+reportlab>=4.0.0
 
 # Utilities
-python-multipart==0.0.9
-httpx==0.27.0
+python-multipart>=0.0.9
+httpx>=0.25.0

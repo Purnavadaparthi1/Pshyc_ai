@@ -2,7 +2,10 @@ import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from core.rag import RAGPipeline
+try:
+    from core.rag import RAGPipeline
+except ImportError:
+    RAGPipeline = None
 from core.agent import GeminiAgent
 
 logger = logging.getLogger(__name__)
