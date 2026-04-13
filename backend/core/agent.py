@@ -1,5 +1,6 @@
 import logging
 from typing import Optional
+import asyncio
 import google.generativeai as genai
 from .config import settings
 
@@ -59,6 +60,33 @@ class GeminiAgent:
             gemini_history.append({"role": role, "parts": [msg["content"]]})
         return gemini_history
 
+    def _determine_response_style(self, message: str) -> str:
+        """Determine if response should be brief or detailed based on user message."""
+        brief_keywords = ["brief", "summary", "short", "quick", "concise", "tl;dr"]
+        detailed_keywords = ["detailed", "explain", "long", "in depth", "comprehensive", "elaborate"]
+        
+        message_lower = message.lower()
+        if any(kw in message_lower for kw in brief_keywords):
+            return "brief"
+        elif any(kw in message_lower for kw in detailed_keywords):
+            return "detailed"
+        else:
+            return "comprehensive"
+
+    async def _retry_api_call(self, chat, prompt: str, max_retries: int = 3) -> str:
+        """Retry API call with exponential backoff on 429 errors."""
+        for attempt in range(max_retries):
+            try:
+                response = await chat.send_message_async(prompt)
+                return response.text
+            except Exception as e:
+                if "429" in str(e) and attempt < max_retries - 1:
+                    wait_time = 2 ** attempt  # Exponential backoff
+                    logger.warning(f"Rate limit hit, retrying in {wait_time}s (attempt {attempt + 1})")
+                    await asyncio.sleep(wait_time)
+                else:
+                    raise e
+
     async def generate_rag_response(
         self,
         message: str,
@@ -67,6 +95,15 @@ class GeminiAgent:
         history: list[dict] | None = None,
     ) -> str:
         """Generate a response grounded in RAG-retrieved course material."""
+        style = self._determine_response_style(message)
+        
+        if style == "brief":
+            style_instruction = "Provide a concise summary (2-3 sentences) focusing on key points from the material."
+        elif style == "detailed":
+            style_instruction = "Provide an in-depth, comprehensive answer with examples, comparisons, and critical analysis."
+        else:
+            style_instruction = "Provide a comprehensive, educationally rich answer that grounds the response in the retrieved material, expands with conceptual depth and examples, follows your teaching philosophy, and ends with a follow-up question to check understanding."
+        
         rag_prompt = f"""A student has asked a question. You have retrieved relevant excerpts from the IGNOU course material below. 
 Use this material as the primary grounding for your answer, citing it explicitly. 
 Supplement with broader psychology knowledge only where necessary, clearly indicating when you do so.
@@ -79,16 +116,11 @@ Sources: {', '.join(sources)}
 
 STUDENT QUESTION: {message}
 
-Provide a comprehensive, educationally rich answer that:
-1. Grounds the response in the retrieved material
-2. Expands with conceptual depth and examples
-3. Follows your teaching philosophy
-4. Ends with a follow-up question to check understanding"""
+{style_instruction}"""
 
         chat_history = self._build_chat_history((history or [])[:-1])
         chat = self.model.start_chat(history=chat_history)
-        response = await chat.send_message_async(rag_prompt)
-        return response.text
+        return await self._retry_api_call(chat, rag_prompt)
 
     async def generate_fallback_response(
         self,
@@ -96,7 +128,33 @@ Provide a comprehensive, educationally rich answer that:
         history: list[dict] | None = None,
     ) -> str:
         """Pure Gemini agent response — used when RAG finds no relevant material."""
+        style = self._determine_response_style(message)
+        
+        if style == "brief":
+            fallback_prompt = f"Provide a brief answer to: {message}"
+        elif style == "detailed":
+            fallback_prompt = f"""Provide a detailed, comprehensive answer to: {message}
+
+Follow these guidelines:
+• Use Socratic dialogue — ask guiding questions to promote critical thinking
+• Pair theory with 2-3 concrete real-world examples
+• Compare competing theories when relevant
+• Structure answers with: Definition → Theoretical Background → Key Concepts → Examples → Critical Evaluation → Conclusion
+• Use relatable analogies for abstract concepts
+• Encourage deep understanding over rote memorisation
+• End with a follow-up question"""
+        else:
+            fallback_prompt = f"""Answer this question as PSYCH.AI, an expert psychology tutor: {message}
+
+Follow your teaching philosophy:
+• Use Socratic dialogue — ask guiding questions to promote critical thinking
+• Pair theory with 2-3 concrete real-world examples
+• Compare competing theories when relevant
+• Structure answers with: Definition → Theoretical Background → Key Concepts → Examples → Critical Evaluation → Conclusion
+• Use relatable analogies for abstract concepts
+• Encourage deep understanding over rote memorisation
+• End with a follow-up question"""
+        
         chat_history = self._build_chat_history((history or [])[:-1])
         chat = self.model.start_chat(history=chat_history)
-        response = await chat.send_message_async(message)
-        return response.text
+        return await self._retry_api_call(chat, fallback_prompt)
