@@ -30,8 +30,8 @@ from core.config import settings
 logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
 logger = logging.getLogger("ingest")
 
-CHUNK_SIZE     = 800    # characters
-CHUNK_OVERLAP  = 150    # characters
+CHUNK_SIZE     = 850    # characters  # ~700–900 tokens (approx. 1.2 chars/token)
+CHUNK_OVERLAP  = 125    # characters  # ~100–150 tokens
 DOCS_DIR       = Path(__file__).parent.parent / "data" / "documents"
 MAPC_DIR       = Path(__file__).parent.parent / "data" / "MAPC"
 
@@ -62,15 +62,44 @@ def extract_text(path: Path) -> str:
 
 # ── Chunking ───────────────────────────────────────────────────────────────
 
+import re
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
+    """
+    Split text into chunks that always end at sentence boundaries and never cut off words or sentences.
+    Overlap is applied at the sentence level, never splitting sentences or words.
+    """
+    # Split text into sentences using regex (handles ., !, ?)
+    sentences = re.split(r'(?<=[.!?])\s+', text)
     chunks = []
-    start = 0
-    while start < len(text):
-        end = start + chunk_size
-        chunk = text[start:end].strip()
-        if chunk:
-            chunks.append(chunk)
-        start += chunk_size - overlap
+    current_chunk = []
+    current_len = 0
+    for i, sentence in enumerate(sentences):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        # If adding the next sentence would exceed the chunk size, start a new chunk
+        if current_len + len(sentence) + (1 if current_chunk else 0) > chunk_size:
+            if current_chunk:
+                chunks.append(' '.join(current_chunk).strip())
+            # Start new chunk, possibly with overlap
+            if overlap > 0 and chunks:
+                # Add overlap sentences from previous chunk
+                overlap_sents = []
+                overlap_len = 0
+                for prev_sentence in reversed(current_chunk):
+                    overlap_len += len(prev_sentence) + 1
+                    overlap_sents.insert(0, prev_sentence)
+                    if overlap_len >= overlap:
+                        break
+                current_chunk = overlap_sents[:]
+                current_len = sum(len(s) + 1 for s in current_chunk)
+            else:
+                current_chunk = []
+                current_len = 0
+        current_chunk.append(sentence)
+        current_len += len(sentence) + (1 if current_chunk else 0)
+    if current_chunk:
+        chunks.append(' '.join(current_chunk).strip())
     return chunks
 
 
@@ -153,18 +182,14 @@ def main():
         files = [Path(args.file)]
     else:
         files = []
-        # Ingest from documents dir
-        files += list(DOCS_DIR.glob("**/*.pdf"))
-        files += list(DOCS_DIR.glob("**/*.txt"))
-        files += list(DOCS_DIR.glob("**/*.md"))
-        # Ingest from MAPC dir
+        # Only ingest from MAPC dir
         files += list(MAPC_DIR.glob("**/*.pdf"))
         files += list(MAPC_DIR.glob("**/*.txt"))
         files += list(MAPC_DIR.glob("**/*.md"))
         if not files:
             logger.warning(
-                f"No documents found in {DOCS_DIR} or {MAPC_DIR}.\n"
-                "Place your IGNOU/MAPC PDF/TXT files there and re-run."
+                f"No documents found in {MAPC_DIR}.\n"
+                "Place your MAPC PDF/TXT files there and re-run."
             )
             return
 
