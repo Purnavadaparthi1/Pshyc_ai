@@ -80,7 +80,10 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
         # If adding the next sentence would exceed the chunk size, start a new chunk
         if current_len + len(sentence) + (1 if current_chunk else 0) > chunk_size:
             if current_chunk:
-                chunks.append(' '.join(current_chunk).strip())
+                chunk = ' '.join(current_chunk).strip()
+                # Clean up whitespace and broken words
+                chunk = re.sub(r'\s+', ' ', chunk)
+                chunks.append(chunk)
             # Start new chunk, possibly with overlap
             if overlap > 0 and chunks:
                 # Add overlap sentences from previous chunk
@@ -99,7 +102,9 @@ def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVE
         current_chunk.append(sentence)
         current_len += len(sentence) + (1 if current_chunk else 0)
     if current_chunk:
-        chunks.append(' '.join(current_chunk).strip())
+        chunk = ' '.join(current_chunk).strip()
+        chunk = re.sub(r'\s+', ' ', chunk)
+        chunks.append(chunk)
     return chunks
 
 

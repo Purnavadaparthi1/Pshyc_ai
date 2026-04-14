@@ -78,21 +78,10 @@ class RAGPipeline:
             text = re.sub(r"(?<!\d)(\b\d{1,2}\b)(?!\d)", "", text)
             # Remove excessive dashes/underscores at the start of any line
             text = re.sub(r"(?m)^[-_]+", "", text)
-
-            # Format side headings: lines that are all uppercase or short (<=7 words, not ending with punctuation)
-            lines = text.splitlines()
-            formatted = []
-            for i, line in enumerate(lines):
-                stripped = line.strip()
-                # Heading: all uppercase and not too long, or short and not ending with .!?
-                if (stripped.isupper() and 2 <= len(stripped) <= 60) or (len(stripped.split()) <= 7 and not stripped.endswith(('.', '!', '?')) and stripped):
-                    # Add a blank line before headings except at the top
-                    if formatted and formatted[-1] != '':
-                        formatted.append("")
-                    formatted.append(f"**{stripped}**")
-                else:
-                    formatted.append(stripped)
-            return "\n".join(formatted).strip()
+            # Remove broken word joins and line breaks
+            text = text.replace("\n", " ")
+            text = re.sub(r"\s+", " ", text)
+            return text.strip()
 
         # Build ranked context — closest chunk first, clean up each chunk
         context_parts = []
@@ -100,7 +89,8 @@ class RAGPipeline:
             cleaned = clean_text(doc)
             context_parts.append(cleaned)
 
-        context = "\n\n---\n\n".join(context_parts)
+        # Merge all cleaned chunks into a single context for LLM
+        context = " ".join(context_parts)
         sources = list({m.get("source", "IGNOU Material") for m in metadatas})
 
         return {
