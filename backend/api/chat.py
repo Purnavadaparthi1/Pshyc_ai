@@ -1,6 +1,7 @@
 import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
+from fastapi.responses import JSONResponse
 
 try:
     from core.rag import RAGPipeline
@@ -40,33 +41,17 @@ class HealthResponse(BaseModel):
 
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
-@router.get("/health", response_model=HealthResponse)
-async def health():
-    rag = RAGPipeline.get_instance()
-    return HealthResponse(
-        status="ok",
-        rag_chunks=rag.collection.count(),
-        model="gemini-2.5-flash",
-    )
-
-
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
     history = [m.model_dump() for m in req.history]
 
     try:
-        # ── Step 1: RAG retrieval ──────────────────────────────────────────
         rag = RAGPipeline.get_instance()
         rag_result = rag.query(req.message)
 
         agent = GeminiAgent.get_instance()
 
         if rag_result["found"]:
-            logger.info(
-                f"RAG hit (similarity={rag_result['similarity']:.3f}) — "
-                f"sources: {rag_result['sources']}"
-            )
-            # ── Step 2a: RAG-grounded response ────────────────────────────
             reply = await agent.generate_rag_response(
                 message=req.message,
                 context=rag_result["context"],
@@ -80,11 +65,6 @@ async def chat(req: ChatRequest):
                 rag_similarity=round(rag_result["similarity"], 3),
             )
         else:
-            logger.info(
-                f"RAG miss (similarity={rag_result['similarity']:.3f}) — "
-                "using Gemini agent fallback"
-            )
-            # ── Step 2b: Pure Gemini agent fallback ───────────────────────
             reply = await agent.generate_fallback_response(
                 message=req.message,
                 history=history,
@@ -95,9 +75,28 @@ async def chat(req: ChatRequest):
                 rag_similarity=round(rag_result["similarity"], 3),
             )
 
+    # ✅ ✅ FIXED ERROR HANDLING
     except Exception as exc:
         logger.exception("Error in /api/chat")
-        raise HTTPException(status_code=500, detail=str(exc))
+        
+        error_str = str(exc)
+
+    # ✅ Handle quota error
+    if "429" in error_str or "quota" in error_str:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "⏳ Too many requests right now. Please wait a few seconds and try again."
+            },
+        )
+
+    # ✅ Generic error
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "⚠️ Something went wrong. Please try again."
+        },
+    )
 
 
 @router.delete("/chat/session/{session_id}")

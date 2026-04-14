@@ -196,9 +196,17 @@ export default function PsychChatbot() {
         });
 
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || `Server error ${res.status}`);
-        }
+          let errMsg = "Request failed";
+
+          try {
+            const errData = await res.json();
+            errMsg = errData.detail || errMsg;
+          } catch {
+            errMsg = "⚠️ Server not reachable. Please try again.";
+          }
+
+          throw new Error(errMsg);
+       }
 
         const data = await res.json();
 
@@ -213,12 +221,19 @@ export default function PsychChatbot() {
         };
 
         setMessages((prev) => [...prev, aiMsg]);
-      } catch (err) {
-        if (err.name === "AbortError") return;
-        setError(err.message || "Something went wrong. Please try again.");
-        setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-        setInput(userText); // restore input
-      } finally {
+      } 
+      catch (err) {
+  if (err.name === "AbortError") return;
+
+  // ✅ show backend message directly
+  setError(err.message);
+
+  // remove user message if failed
+  setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+
+  // restore input
+  setInput(userText);
+} finally {
         setLoading(false);
         inputRef.current?.focus();
       }
