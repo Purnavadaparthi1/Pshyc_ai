@@ -1,7 +1,7 @@
 import logging
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
-
+from fastapi.responses import JSONResponse
 from core.rag import RAGPipeline
 from core.agent import GeminiAgent
 
@@ -108,7 +108,34 @@ async def chat(req: ChatRequest):
 
     except Exception as exc:
         logger.exception("Error in /api/chat")
-        raise HTTPException(status_code=500, detail=str(exc))
+
+        error_str = str(exc)
+
+    # ✅ Quota / rate limit error
+    if "429" in error_str or "quota" in error_str:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "⏳ Too many requests right now. Please wait a few seconds and try again."
+            },
+        )
+
+    # ✅ Network / timeout
+    if "timeout" in error_str.lower():
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "🌐 Network is slow. Please try again."
+            },
+        )
+
+    # ✅ Generic error
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "⚠️ Something went wrong. Please try again."
+        },
+    )
 
 
 @router.delete("/chat/session/{session_id}")
