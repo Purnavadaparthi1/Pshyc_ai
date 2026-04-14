@@ -33,6 +33,7 @@ logger = logging.getLogger("ingest")
 CHUNK_SIZE     = 800    # characters
 CHUNK_OVERLAP  = 150    # characters
 DOCS_DIR       = Path(__file__).parent.parent / "data" / "documents"
+MAPC_DIR       = Path(__file__).parent.parent / "data" / "MAPC"
 
 
 # ── Text extraction ────────────────────────────────────────────────────────
@@ -147,16 +148,23 @@ def main():
     parser.add_argument("--reset", action="store_true", help="Wipe and re-ingest")
     args = parser.parse_args()
 
+
     if args.file:
         files = [Path(args.file)]
     else:
-        files = list(DOCS_DIR.glob("**/*.pdf")) + \
-                list(DOCS_DIR.glob("**/*.txt")) + \
-                list(DOCS_DIR.glob("**/*.md"))
+        files = []
+        # Ingest from documents dir
+        files += list(DOCS_DIR.glob("**/*.pdf"))
+        files += list(DOCS_DIR.glob("**/*.txt"))
+        files += list(DOCS_DIR.glob("**/*.md"))
+        # Ingest from MAPC dir
+        files += list(MAPC_DIR.glob("**/*.pdf"))
+        files += list(MAPC_DIR.glob("**/*.txt"))
+        files += list(MAPC_DIR.glob("**/*.md"))
         if not files:
             logger.warning(
-                f"No documents found in {DOCS_DIR}.\n"
-                "Place your IGNOU PDF/TXT files there and re-run."
+                f"No documents found in {DOCS_DIR} or {MAPC_DIR}.\n"
+                "Place your IGNOU/MAPC PDF/TXT files there and re-run."
             )
             return
 

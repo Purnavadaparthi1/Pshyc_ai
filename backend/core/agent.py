@@ -78,6 +78,8 @@ class GeminiAgent:
         for attempt in range(max_retries):
             try:
                 response = await chat.send_message_async(prompt)
+                usage = response.usage_metadata
+                logger.info(f"Gemini API usage: prompt_tokens={usage.prompt_token_count}, output_tokens={usage.candidates_token_count}, total_tokens={usage.total_token_count}")
                 return response.text
             except Exception as e:
                 if "429" in str(e) and attempt < max_retries - 1:
@@ -94,16 +96,15 @@ class GeminiAgent:
         sources: list[str],
         history: list[dict] | None = None,
     ) -> str:
-        """Generate a response grounded in RAG-retrieved course material."""
+        """Generate a response grounded in RAG-retrieved course material. Only one Gemini API call per user input."""
         style = self._determine_response_style(message)
-        
         if style == "brief":
             style_instruction = "Provide a concise summary (2-3 sentences) focusing on key points from the material."
         elif style == "detailed":
             style_instruction = "Provide an in-depth, comprehensive answer with examples, comparisons, and critical analysis."
         else:
             style_instruction = "Provide a comprehensive, educationally rich answer that grounds the response in the retrieved material, expands with conceptual depth and examples, follows your teaching philosophy, and ends with a follow-up question to check understanding."
-        
+
         rag_prompt = f"""A student has asked a question. You have retrieved relevant excerpts from the IGNOU course material below. 
 Use this material as the primary grounding for your answer, citing it explicitly. 
 Supplement with broader psychology knowledge only where necessary, clearly indicating when you do so.
@@ -115,11 +116,12 @@ Sources: {', '.join(sources)}
 ═══════════════════════════════════════
 
 STUDENT QUESTION: {message}
-
 {style_instruction}"""
 
-        chat_history = self._build_chat_history((history or [])[:-1])
+        # Use the full history if provided, otherwise just the current message
+        chat_history = self._build_chat_history(history or [])
         chat = self.model.start_chat(history=chat_history)
+        # Only one Gemini API call per user input
         return await self._retry_api_call(chat, rag_prompt)
 
     async def generate_fallback_response(
@@ -127,7 +129,7 @@ STUDENT QUESTION: {message}
         message: str,
         history: list[dict] | None = None,
     ) -> str:
-        """Pure Gemini agent response — used when RAG finds no relevant material."""
+        """Pure Gemini agent response — used when RAG finds no relevant material. Only one Gemini API call per user input."""
         style = self._determine_response_style(message)
         
         if style == "brief":
@@ -155,6 +157,9 @@ Follow your teaching philosophy:
 • Encourage deep understanding over rote memorisation
 • End with a follow-up question"""
         
-        chat_history = self._build_chat_history((history or [])[:-1])
+        # Use the full history if provided, otherwise just the current message
+        chat_history = self._build_chat_history(history or [])
         chat = self.model.start_chat(history=chat_history)
+        # Only one Gemini API call per user input
         return await self._retry_api_call(chat, fallback_prompt)
+    
