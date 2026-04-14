@@ -58,32 +58,20 @@ async def chat(req: ChatRequest):
 
         agent = GeminiAgent.get_instance()
 
-        # Serve RAG context directly if similarity is high (e.g., >= 0.5)
-        if rag_result["found"] and rag_result["similarity"] >= 0.5:
-            logger.info(
-                f"RAG direct answer (similarity={rag_result['similarity']:.3f}) — "
-                f"sources: {rag_result['sources']}"
-            )
-            # Remove PDF/source names from the response
-            reply = rag_result["context"]
-            return ChatResponse(
-                reply=reply,
-                source="rag",
-                rag_sources=[],  # Do not return PDF/source names
-                rag_similarity=round(rag_result["similarity"], 3),
-            )
-        elif rag_result["found"]:
+        # Always use Gemini LLM to generate the final answer, never return raw context
+        if rag_result["found"]:
             logger.info(
                 f"RAG hit (similarity={rag_result['similarity']:.3f}) — "
                 f"sources: {rag_result['sources']}"
             )
-            # ── Step 2a: RAG-grounded response via Gemini ────────────────
+            # Step 2: RAG-grounded response via Gemini
             reply = await agent.generate_rag_response(
                 message=req.message,
                 context=rag_result["context"],
                 sources=rag_result["sources"],
                 history=history,
             )
+            print("LLM RESPONSE:", reply)
             return ChatResponse(
                 reply=reply,
                 source="rag",
@@ -95,11 +83,12 @@ async def chat(req: ChatRequest):
                 f"RAG miss (similarity={rag_result['similarity']:.3f}) — "
                 "using Gemini agent fallback"
             )
-            # ── Step 2b: Pure Gemini agent fallback ───────────────────────
+            # Step 2b: Pure Gemini agent fallback
             reply = await agent.generate_fallback_response(
                 message=req.message,
                 history=history,
             )
+            print("LLM RESPONSE:", reply)
             return ChatResponse(
                 reply=reply,
                 source="gemini",

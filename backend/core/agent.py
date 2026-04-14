@@ -1,3 +1,4 @@
+import re
 import logging
 from typing import Optional
 import asyncio
@@ -6,37 +7,59 @@ from .config import settings
 
 logger = logging.getLogger(__name__)
 
-PSYCH_SYSTEM_PROMPT = """You are PSYCH.AI — an expert psychology tutor, academic companion, and mental health educator built exclusively for IGNOU Masters in Psychology students.
+PSYCH_SYSTEM_PROMPT = """
+You are an IGNOU Psychology Tutor.
 
-YOUR EXPERTISE COVERS:
-• All IGNOU MA Psychology courses: MPC-001 (Cognitive Processes), MPC-002 (LifeSpan Psychology), MPC-003 (Personality), MPC-004 (Advanced Social Psychology), MPC-005 (Research Methods), MPC-006 (Statistics), MPC-007 (Abnormal Psychology & Therapies), MPCE electives (Counselling, Clinical, Industrial)
-• Foundational theorists: Freud, Jung, Adler, Rogers, Maslow, Skinner, Bandura, Piaget, Erikson, Vygotsky, Beck, Ellis
-• Diagnosis & classification: DSM-5-TR, ICD-11, psychological assessments (Rorschach, TAT, MMPI, BDI, WAIS)
-• Clinical interventions: CBT, DBT, ACT, psychoanalysis, humanistic therapies, behaviour modification
-• Research methods: experimental, correlational, qualitative, case study; statistical concepts (ANOVA, regression, correlation)
-• Organisational & industrial psychology, neuropsychology, positive psychology, health psychology
+Always answer in this format:
+1. Title
+2. Definition
+3. Explanation with subheadings
+4. Key points (bulleted)
+5. Conclusion
 
-YOUR TEACHING PHILOSOPHY:
-1. Use Socratic dialogue — ask guiding questions to promote critical thinking, not just give answers
-2. Always pair theory with 2-3 concrete real-world examples (clinical, social, developmental, or organisational)
-3. Compare competing theories side-by-side when relevant (e.g., "Freud sees X as... whereas Rogers views it as...")
-4. Structure exam answers with: Definition → Theoretical Background → Key Concepts → Examples → Critical Evaluation → Conclusion
-5. Use relatable analogies for abstract concepts — make complex neuroscience or statistics feel accessible
-6. Encourage deep understanding over rote memorisation
-7. When a student seems stuck or frustrated, be warm, patient, and encouraging
+IMPORTANT INSTRUCTIONS:
+- Start with a clear heading
+- Use proper subheadings
+- Use bullet points where needed
+- Do NOT dump raw text
+- Rewrite the answer in clean structured format
+- Do NOT repeat irrelevant content
+- If the context is insufficient, say so and do not hallucinate
+"""
 
-RESPONSE STYLE:
-• For concept explanations: structured, layered, comprehensive
-• For exam-prep questions: provide model answers in IGNOU long-form format
-• For "I don't understand X": start from first principles, use the building-block method
-• For applied questions: use case vignettes and walk through diagnostic/therapeutic reasoning
-• Always ask a follow-up question at the end to deepen engagement
-
-You answer EVERY question the student asks. If a question is tangential to psychology or mental health, you answer helpfully. Only if completely unrelated to academics or student life do you gently refocus while still being helpful."""
 
 
 class GeminiAgent:
     _instance: Optional["GeminiAgent"] = None
+
+    def clean_context(self, text: str) -> str:
+        # Fix broken words (e.g., "behavioUr" → "behavio Ur")
+        text = re.sub(r'(?<=\w)(?=[A-Z])', ' ', text)
+        # Remove weird page artifacts
+        text = re.sub(r'\d+Theories of Personality-I', '', text)
+        # Remove duplicate sentences
+        sentences = text.split('. ')
+        seen = set()
+        cleaned = []
+        for s in sentences:
+            if s not in seen:
+                cleaned.append(s)
+                seen.add(s)
+        text = '. '.join(cleaned)
+        # Normalize spaces
+        text = re.sub(r'\s+', ' ', text)
+        return text.strip()
+
+    def post_process(self, text: str) -> str:
+        # Remove repeated lines
+        lines = text.split('\n')
+        seen = set()
+        result = []
+        for line in lines:
+            if line.strip() not in seen:
+                result.append(line)
+                seen.add(line.strip())
+        return "\n".join(result)
 
     def __init__(self):
         genai.configure(api_key=settings.GEMINI_API_KEY)
@@ -105,24 +128,53 @@ class GeminiAgent:
         else:
             style_instruction = "Provide a comprehensive, educationally rich answer that grounds the response in the retrieved material, expands with conceptual depth and examples, follows your teaching philosophy, and ends with a follow-up question to check understanding."
 
-        rag_prompt = f"""A student has asked a question. You have retrieved relevant excerpts from the IGNOU course material below. 
-Use this material as the primary grounding for your answer, citing it explicitly. 
-Supplement with broader psychology knowledge only where necessary, clearly indicating when you do so.
+        cleaned_context = self.clean_context(context)
+        rag_prompt = f"""
+    You are an IGNOU Psychology Tutor.
 
-═══ RETRIEVED IGNOU COURSE MATERIAL ═══
-{context}
+    Your task is to generate a CLEAN and STRUCTURED answer.
 
-Sources: {', '.join(sources)}
-═══════════════════════════════════════
+    STRICT RULES (MANDATORY):
+    - DO NOT copy sentences from context
+    - DO NOT repeat content
+    - FIX broken words
+    - REMOVE irrelevant lines
+    - USE ONLY headings and bullet points (NO plain paragraphs)
+    - FORMAT using markdown
 
-STUDENT QUESTION: {message}
-{style_instruction}"""
+    OUTPUT FORMAT (MANDATORY):
+
+    ## Main Title
+
+    ### Heading 1
+    - Bullet point 1
+    - Bullet point 2
+
+    ### Heading 2
+    - Bullet point 1
+    - Bullet point 2
+
+    ### Heading 3
+    - Bullet point 1
+    - Bullet point 2
+
+    (Do NOT write plain paragraphs. Use only headings and bullet points for all content.)
+
+    Question:
+    {message}
+
+    Context:
+    {cleaned_context}
+
+    Now generate a well-structured answer.
+    """
 
         # Use the full history if provided, otherwise just the current message
         chat_history = self._build_chat_history(history or [])
         chat = self.model.start_chat(history=chat_history)
         # Only one Gemini API call per user input
-        return await self._retry_api_call(chat, rag_prompt)
+        response = await self._retry_api_call(chat, rag_prompt)
+        return self.post_process(response)
 
     async def generate_fallback_response(
         self,

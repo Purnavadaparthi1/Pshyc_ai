@@ -33,12 +33,15 @@ class RAGPipeline:
         return cls._instance
 
     def query(self, question: str, top_k: int | None = None) -> dict:
+        # Hybrid query: boost keywords for Freud's model
+        keyword_boost = "id ego superego structural model personality explanation"
+        hybrid_query = f"{keyword_boost} {question}"
         k = top_k or settings.RAG_TOP_K
         count = self.collection.count()
         if count == 0:
             return {"found": False, "context": "", "sources": [], "similarity": 0.0}
 
-        query_embedding = self.embedder.encode(question).tolist()
+        query_embedding = self.embedder.encode(hybrid_query).tolist()
 
         results = self.collection.query(
             query_embeddings=[query_embedding],
@@ -49,53 +52,38 @@ class RAGPipeline:
         if not results["documents"] or not results["documents"][0]:
             return {"found": False, "context": "", "sources": [], "similarity": 0.0}
 
-        distances = results["distances"][0]
-        # In ChromaDB cosine space: distance = 1 - cosine_similarity
-        best_similarity = 1.0 - distances[0]
-
-        if best_similarity < settings.RAG_SIMILARITY_THRESHOLD:
-            logger.info(
-                f"RAG below threshold ({best_similarity:.3f} < "
-                f"{settings.RAG_SIMILARITY_THRESHOLD}), returning no answer"
-            )
-            return {
-                "found": False,
-                "context": "Sorry, no relevant content was found in the MAPC documents.",
-                "sources": [],
-                "similarity": best_similarity,
-            }
-
+        # Re-rank: sort by similarity (lowest distance)
         docs = results["documents"][0]
         metadatas = results["metadatas"][0]
+        distances = results["distances"][0]
+        doc_tuples = list(zip(docs, metadatas, distances))
+        doc_tuples.sort(key=lambda x: x[2])  # sort by distance ascending
+        # Take best 3 for context
+        top_docs = doc_tuples[:3]
 
         import re
         def clean_text(text):
-            # Remove [Unit-1.pdf] or similar at the start of any line
             text = re.sub(r"^\s*\[.*?\]\s*", "", text, flags=re.MULTILINE)
-            # Remove section numbers like 1.2.2, 2.1, 3. etc. anywhere in the text
             text = re.sub(r"(\b\d+(?:[\.-]\d+)+\b)", "", text)
-            # Remove single numbers surrounded by spaces (not years)
             text = re.sub(r"(?<!\d)(\b\d{1,2}\b)(?!\d)", "", text)
-            # Remove excessive dashes/underscores at the start of any line
             text = re.sub(r"(?m)^[-_]+", "", text)
-            # Remove broken word joins and line breaks
             text = text.replace("\n", " ")
             text = re.sub(r"\s+", " ", text)
             return text.strip()
 
-        # Build ranked context — closest chunk first, clean up each chunk
         context_parts = []
-        for doc in docs:
+        sources = set()
+        for doc, meta, _ in top_docs:
             cleaned = clean_text(doc)
             context_parts.append(cleaned)
+            sources.add(meta.get("source", "IGNOU Material"))
 
-        # Merge all cleaned chunks into a single context for LLM
         context = " ".join(context_parts)
-        sources = list({m.get("source", "IGNOU Material") for m in metadatas})
+        best_similarity = 1.0 - top_docs[0][2] if top_docs else 0.0
 
         return {
             "found": True,
             "context": context,
-            "sources": sources,
+            "sources": list(sources),
             "similarity": best_similarity,
         }

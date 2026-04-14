@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     CHROMA_PERSIST_DIR: str = str(BASE_DIR / "chroma_db")
     EMBEDDING_MODEL: str = "all-MiniLM-L6-v2"
     RAG_SIMILARITY_THRESHOLD: float = 0.6
-    RAG_TOP_K: int = 3
+    RAG_TOP_K: int = 5
     FRONTEND_DIST: str = str(BASE_DIR.parent / "frontend" / "dist")
 
     class Config:
