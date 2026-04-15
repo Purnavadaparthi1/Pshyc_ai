@@ -29,8 +29,43 @@ IMPORTANT INSTRUCTIONS:
 
 
 
+
 class GeminiAgent:
+    # Token management for rate limiting
+    MAX_TOKENS_PER_MIN = 60000  # Adjust based on your Gemini API quota
+    TOKEN_SAFETY_MARGIN = 0.9   # Use only up to 90% of quota
+    _tokens_used = 0
+    _last_reset = None
     _instance: Optional["GeminiAgent"] = None
+
+    def __init__(self):
+        genai.configure(api_key=settings.GEMINI_API_KEY)
+        self.model = genai.GenerativeModel(
+            model_name="gemini-2.5-flash",
+            system_instruction=PSYCH_SYSTEM_PROMPT,
+        )
+        logger.info("Gemini agent initialised (gemini-2.5-flash)")
+
+    @classmethod
+    def get_instance(cls) -> "GeminiAgent":
+        if cls._instance is None:
+            cls._instance = cls()
+        return cls._instance
+
+    def _estimate_tokens(self, text: str) -> int:
+        # Rough estimate: 1 token ≈ 4 chars (for English)
+        return max(1, len(text) // 4)
+
+    def _reset_token_counter_if_needed(self):
+        import time
+        now = time.time()
+        if self._last_reset is None or now - self._last_reset > 60:
+            self._tokens_used = 0
+            self._last_reset = now
+
+    def _can_make_request(self, estimated_tokens: int) -> bool:
+        self._reset_token_counter_if_needed()
+        return (self._tokens_used + estimated_tokens) < self.MAX_TOKENS_PER_MIN * self.TOKEN_SAFETY_MARGIN
 
     def clean_context(self, text: str) -> str:
         # Fix broken words (e.g., "behavioUr" → "behavio Ur")
@@ -61,20 +96,6 @@ class GeminiAgent:
                 seen.add(line.strip())
         return "\n".join(result)
 
-    def __init__(self):
-        genai.configure(api_key=settings.GEMINI_API_KEY)
-        self.model = genai.GenerativeModel(
-            model_name="gemini-2.5-flash",
-            system_instruction=PSYCH_SYSTEM_PROMPT,
-        )
-        logger.info("Gemini agent initialised (gemini-2.5-flash)")
-
-    @classmethod
-    def get_instance(cls) -> "GeminiAgent":
-        if cls._instance is None:
-            cls._instance = cls()
-        return cls._instance
-
     def _build_chat_history(self, history: list[dict]) -> list[dict]:
         """Convert API history format to Gemini format."""
         gemini_history = []
@@ -87,7 +108,6 @@ class GeminiAgent:
         """Determine if response should be brief or detailed based on user message."""
         brief_keywords = ["brief", "summary", "short", "quick", "concise", "tl;dr"]
         detailed_keywords = ["detailed", "explain", "long", "in depth", "comprehensive", "elaborate"]
-        
         message_lower = message.lower()
         if any(kw in message_lower for kw in brief_keywords):
             return "brief"
@@ -97,12 +117,25 @@ class GeminiAgent:
             return "comprehensive"
 
     async def _retry_api_call(self, chat, prompt: str, max_retries: int = 3) -> str:
-        """Retry API call with exponential backoff on 429 errors."""
+        """Retry API call with exponential backoff on 429 errors, and exit early if close to rate limit."""
+        estimated_tokens = self._estimate_tokens(prompt)
+        if not self._can_make_request(estimated_tokens):
+            logger.warning("Approaching Gemini API rate limit. Returning partial answer.")
+            # Return a polite, structured partial answer
+            return (
+                "## Partial Answer\n"
+                "### Rate Limit Notice\n"
+                "- The Gemini API rate limit is nearly reached.\n"
+                "- Please wait a minute and try again for a more complete answer.\n"
+                "- Here is as much as could be generated without exceeding the limit.\n"
+            )
         for attempt in range(max_retries):
             try:
                 response = await chat.send_message_async(prompt)
-                usage = response.usage_metadata
-                logger.info(f"Gemini API usage: prompt_tokens={usage.prompt_token_count}, output_tokens={usage.candidates_token_count}, total_tokens={usage.total_token_count}")
+                usage = getattr(response, 'usage_metadata', None)
+                if usage:
+                    self._tokens_used += usage.total_token_count
+                    logger.info(f"Gemini API usage: prompt_tokens={usage.prompt_token_count}, output_tokens={usage.candidates_token_count}, total_tokens={usage.total_token_count}, tokens_used_this_minute={self._tokens_used}")
                 return response.text
             except Exception as e:
                 if "429" in str(e) and attempt < max_retries - 1:
@@ -130,44 +163,44 @@ class GeminiAgent:
 
         cleaned_context = self.clean_context(context)
         rag_prompt = f"""
-    You are an IGNOU Psychology Tutor.
+You are an IGNOU Psychology Tutor.
 
-    Your task is to generate a CLEAN and STRUCTURED answer.
+Your task is to generate a CLEAN and STRUCTURED answer.
 
-    STRICT RULES (MANDATORY):
-    - DO NOT copy sentences from context
-    - DO NOT repeat content
-    - FIX broken words
-    - REMOVE irrelevant lines
-    - USE ONLY headings and bullet points (NO plain paragraphs)
-    - FORMAT using markdown
+STRICT RULES (MANDATORY):
+- DO NOT copy sentences from context
+- DO NOT repeat content
+- FIX broken words
+- REMOVE irrelevant lines
+- USE ONLY headings and bullet points (NO plain paragraphs)
+- FORMAT using markdown
 
-    OUTPUT FORMAT (MANDATORY):
+OUTPUT FORMAT (MANDATORY):
 
-    ## Main Title
+## Main Title
 
-    ### Heading 1
-    - Bullet point 1
-    - Bullet point 2
+### Heading 1
+- Bullet point 1
+- Bullet point 2
 
-    ### Heading 2
-    - Bullet point 1
-    - Bullet point 2
+### Heading 2
+- Bullet point 1
+- Bullet point 2
 
-    ### Heading 3
-    - Bullet point 1
-    - Bullet point 2
+### Heading 3
+- Bullet point 1
+- Bullet point 2
 
-    (Do NOT write plain paragraphs. Use only headings and bullet points for all content.)
+(Do NOT write plain paragraphs. Use only headings and bullet points for all content.)
 
-    Question:
-    {message}
+Question:
+{message}
 
-    Context:
-    {cleaned_context}
+Context:
+{cleaned_context}
 
-    Now generate a well-structured answer.
-    """
+Now generate a well-structured answer.
+"""
 
         # Use the full history if provided, otherwise just the current message
         chat_history = self._build_chat_history(history or [])

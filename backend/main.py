@@ -54,45 +54,10 @@ def build_frontend():
     logger.info("Frontend build complete.")
 
 
+
+# No-op: PDF generation and auto-ingestion removed. Use scripts/ingest.py for MAPC docs.
 def bootstrap_knowledge_base():
-    """
-    On first run:
-      1. Generate all psychology PDFs from the bundled content module
-      2. Ingest them into ChromaDB
-    Subsequent runs: no-op (PDFs and ChromaDB already present).
-    """
-    from scripts.generate_docs import generate_all_pdfs, pdfs_already_exist
-    from scripts.ingest import ingest_files
-
-    rag = RAGPipeline.get_instance()
-
-    if rag.collection.count() > 0:
-        logger.info(
-            f"Knowledge base already indexed ({rag.collection.count()} chunks) — skipping."
-        )
-        return
-
-    logger.info("═" * 55)
-    logger.info("  First run detected — bootstrapping knowledge base")
-    logger.info("═" * 55)
-
-    # Step 1: Generate PDFs if not present
-    if not pdfs_already_exist():
-        logger.info("Generating psychology knowledge base PDFs...")
-        pdf_paths = generate_all_pdfs()
-    else:
-        from pathlib import Path
-        docs_dir = Path(__file__).parent / "data" / "documents"
-        pdf_paths = list(docs_dir.glob("*.pdf"))
-        logger.info(f"PDFs already generated ({len(pdf_paths)} files) — using existing.")
-
-    # Step 2: Ingest into ChromaDB
-    logger.info("Ingesting PDFs into ChromaDB vector store...")
-    pdf_file_objects = [Path(p) for p in pdf_paths]
-    ingest_files(pdf_file_objects, reset=False)
-    logger.info(
-        f"Knowledge base ready — {rag.collection.count()} chunks indexed."
-    )
+    logger.info("Knowledge base bootstrap skipped. Use MAPC docs and scripts/ingest.py for ingestion.")
 
 
 @asynccontextmanager

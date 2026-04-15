@@ -73,12 +73,44 @@ class RAGPipeline:
 
         context_parts = []
         sources = set()
+        # Collect topic/subtopic from the best match
+        if top_docs:
+            best_meta = top_docs[0][1]
+            best_topic = best_meta.get("topic")
+            best_unit = best_meta.get("unit")
+            best_subtopic = best_meta.get("subtopic")
+        else:
+            best_topic = best_unit = best_subtopic = None
+
+        # Aggregate all chunks from the same topic/subtopic if context is too short
+        context_min_lines = 15
         for doc, meta, _ in top_docs:
             cleaned = clean_text(doc)
             context_parts.append(cleaned)
             sources.add(meta.get("source", "IGNOU Material"))
 
         context = " ".join(context_parts)
+        # If context is too short, fetch more from same topic/subtopic
+        if len(context.splitlines()) < context_min_lines and best_topic:
+            # Query all docs with same topic/subtopic
+            filter_query = {"topic": best_topic}
+            if best_unit:
+                filter_query["unit"] = best_unit
+            if best_subtopic:
+                filter_query["subtopic"] = best_subtopic
+            extra_results = self.collection.get(where=filter_query, include=["documents", "metadatas"])
+            extra_docs = extra_results.get("documents", [])
+            extra_metas = extra_results.get("metadatas", [])
+            # Flatten and clean
+            extra_contexts = []
+            for doclist in extra_docs:
+                for doc in doclist:
+                    cleaned = clean_text(doc)
+                    if cleaned not in context_parts:
+                        extra_contexts.append(cleaned)
+            if extra_contexts:
+                context += "\n" + "\n".join(extra_contexts)
+
         best_similarity = 1.0 - top_docs[0][2] if top_docs else 0.0
 
         return {

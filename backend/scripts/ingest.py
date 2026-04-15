@@ -16,6 +16,7 @@ import hashlib
 import logging
 import sys
 import os
+import re
 from pathlib import Path
 
 # Allow importing from backend/
@@ -60,7 +61,56 @@ def extract_text(path: Path) -> str:
         return ""
 
 
-# ── Chunking ───────────────────────────────────────────────────────────────
+import re
+from typing import List, Dict, Tuple
+
+def extract_headings_and_chunks(text: str) -> List[Tuple[str, str, str, str]]:
+    """
+    Splits text into topic-aware chunks and extracts Unit, Topic, Subtopic as metadata.
+    Returns a list of (unit, topic, subtopic, chunk_text) tuples.
+    """
+    # Regex patterns for headings (customize as needed)
+    unit_pat = re.compile(r'^(UNIT[\s\-]*\d+|UNIT[\s\-]*[A-Z]+)', re.MULTILINE)
+    topic_pat = re.compile(r'^(TOPIC[\s\-]*\d*:?|[A-Z][A-Z\s]{5,})', re.MULTILINE)
+    subtopic_pat = re.compile(r'^(SUBTOPIC[\s\-]*\d*:?|[A-Z][A-Z\s]{5,})', re.MULTILINE)
+
+    # Find all unit headings
+    units = [(m.start(), m.group().strip()) for m in unit_pat.finditer(text)]
+    if not units:
+        units = [(0, "Unit-Unknown")]
+    units.append((len(text), None))
+
+    chunks = []
+    for i in range(len(units) - 1):
+        unit_start, unit_heading = units[i]
+        unit_end = units[i+1][0]
+        unit_text = text[unit_start:unit_end]
+
+        # Find topics within this unit
+        topics = [(m.start(), m.group().strip()) for m in topic_pat.finditer(unit_text)]
+        if not topics:
+            topics = [(0, "Topic-Unknown")]
+        topics.append((len(unit_text), None))
+
+        for j in range(len(topics) - 1):
+            topic_start, topic_heading = topics[j]
+            topic_end = topics[j+1][0]
+            topic_text = unit_text[topic_start:topic_end]
+
+            # Find subtopics within this topic
+            subtopics = [(m.start(), m.group().strip()) for m in subtopic_pat.finditer(topic_text)]
+            if not subtopics:
+                subtopics = [(0, "Subtopic-Unknown")]
+            subtopics.append((len(topic_text), None))
+
+            for k in range(len(subtopics) - 1):
+                sub_start, sub_heading = subtopics[k]
+                sub_end = subtopics[k+1][0]
+                chunk = topic_text[sub_start:sub_end].strip()
+                # Only keep non-empty chunks
+                if chunk:
+                    chunks.append((unit_heading, topic_heading, sub_heading, chunk))
+    return chunks
 
 import re
 def chunk_text(text: str, chunk_size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> list[str]:
@@ -181,8 +231,7 @@ def main():
     parser.add_argument("--file", type=str, help="Path to a single file to ingest")
     parser.add_argument("--reset", action="store_true", help="Wipe and re-ingest")
     args = parser.parse_args()
-
-
+    logger.info("[DEBUG] Starting ingest.py main()")
     if args.file:
         files = [Path(args.file)]
     else:
@@ -191,6 +240,7 @@ def main():
         files += list(MAPC_DIR.glob("**/*.pdf"))
         files += list(MAPC_DIR.glob("**/*.txt"))
         files += list(MAPC_DIR.glob("**/*.md"))
+        logger.info(f"[DEBUG] Found {len(files)} files for ingestion in {MAPC_DIR}")
         if not files:
             logger.warning(
                 f"No documents found in {MAPC_DIR}.\n"
