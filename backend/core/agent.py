@@ -30,7 +30,37 @@ IMPORTANT INSTRUCTIONS:
 
 
 
+
 class GeminiAgent:
+    @staticmethod
+    def is_insufficient_context(reply: str) -> bool:
+        """Detect if the LLM reply signals insufficient or irrelevant context using regex and partial/fuzzy matching."""
+        import re
+        fallback_patterns = [
+            r"insufficient(ly)? (provided )?context",
+            r"not enough context",
+            r"no relevant content",
+            r"context does not provide",
+            r"sorry[\w\s,]*no relevant content",
+            r"cannot (be generated|answer|respond) (from|using|with) (the )?(provided|given)? ?context",
+            r"not (mentioned|explained|covered|found|present|available) (within|in|by|from|the)? (the )?(given|provided|current)? ?context",
+            r"the provided text discusses",
+            r"however,? specific (techniques|topics|concepts|details)",
+            r"context (does not|is not|was not|cannot|fails to) (provide|cover|contain|include|address|support)",
+            r"context (is|was)? ?(missing|insufficient|irrelevant|incomplete|lacking)",
+            r"no information (available|found|present) (in|within|from|by|the)? (the )?context",
+            r"not (present|covered|found|included) in (the )?context",
+            r"there is no (information|guidance|answer|content) (in|within|from|by|the)? (the )?context",
+            r"cannot answer (from|using|with) (the )?context",
+            r"the context does not (contain|cover|provide|include|address)"
+        ]
+        reply_lower = reply.lower()
+        for pattern in fallback_patterns:
+            if re.search(pattern, reply_lower):
+                logger.info(f"Fallback triggered by pattern: '{pattern}' in reply: {reply_lower}")
+                return True
+        return False
+
     # Token management for rate limiting
     MAX_TOKENS_PER_MIN = 60000  # Adjust based on your Gemini API quota
     TOKEN_SAFETY_MARGIN = 0.9   # Use only up to 90% of quota
