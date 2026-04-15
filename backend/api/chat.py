@@ -72,6 +72,23 @@ async def chat(req: ChatRequest):
                 history=history,
             )
             print("LLM RESPONSE:", reply)
+            # Fallback to Gemini if LLM says context is insufficient or not accurate
+            fallback_phrases = [
+                "insufficient context", "not enough context", "no relevant content", "context does not provide", "sorry, no relevant content"
+            ]
+            if any(phrase in reply.lower() for phrase in fallback_phrases):
+                logger.info("LLM indicated insufficient context, using Gemini fallback.")
+                reply = await agent.generate_fallback_response(
+                    message=req.message,
+                    history=history,
+                )
+                print("GEMINI FALLBACK RESPONSE:", reply)
+                return ChatResponse(
+                    reply=reply,
+                    source="gemini",
+                    rag_sources=rag_result["sources"],
+                    rag_similarity=round(rag_result["similarity"], 3),
+                )
             return ChatResponse(
                 reply=reply,
                 source="rag",
