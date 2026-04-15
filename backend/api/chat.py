@@ -49,43 +49,51 @@ async def health():
 
 @router.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest):
+
+    import time
+    t0 = time.perf_counter()
     history = [m.model_dump() for m in req.history]
 
     try:
-        # ── Step 1: RAG retrieval ──────────────────────────────────────────
         rag = RAGPipeline.get_instance()
+        t1 = time.perf_counter()
         rag_result = rag.query(req.message)
+        t2 = time.perf_counter()
 
         agent = GeminiAgent.get_instance()
 
-        # Always use Gemini LLM to generate the final answer, never return raw context
         if rag_result["found"]:
             logger.info(
                 f"RAG hit (similarity={rag_result['similarity']:.3f}) — "
                 f"sources: {rag_result['sources']}"
             )
             # Step 2: RAG-grounded response via Gemini
+            t3 = time.perf_counter()
             reply = await agent.generate_rag_response(
                 message=req.message,
                 context=rag_result["context"],
                 sources=rag_result["sources"],
                 history=history,
             )
+            t4 = time.perf_counter()
             print("LLM RESPONSE:", reply)
-            # Fallback to Gemini if LLM says context is insufficient or not accurate
             if GeminiAgent.is_insufficient_context(reply):
                 logger.info("LLM indicated insufficient context, using Gemini fallback.")
+                t5 = time.perf_counter()
                 reply = await agent.generate_fallback_response(
                     message=req.message,
                     history=history,
                 )
+                t6 = time.perf_counter()
                 print("GEMINI FALLBACK RESPONSE:", reply)
+                logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini RAG: {t4-t3:.2f}s, Gemini fallback: {t6-t5:.2f}s, Total: {t6-t0:.2f}s")
                 return ChatResponse(
                     reply=reply,
                     source="gemini",
                     rag_sources=rag_result["sources"],
                     rag_similarity=round(rag_result["similarity"], 3),
                 )
+            logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini RAG: {t4-t3:.2f}s, Total: {t4-t0:.2f}s")
             return ChatResponse(
                 reply=reply,
                 source="rag",
@@ -97,12 +105,14 @@ async def chat(req: ChatRequest):
                 f"RAG miss (similarity={rag_result['similarity']:.3f}) — "
                 "using Gemini agent fallback"
             )
-            # Step 2b: Pure Gemini agent fallback
+            t3 = time.perf_counter()
             reply = await agent.generate_fallback_response(
                 message=req.message,
                 history=history,
             )
+            t4 = time.perf_counter()
             print("LLM RESPONSE:", reply)
+            logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini fallback: {t4-t3:.2f}s, Total: {t4-t0:.2f}s")
             return ChatResponse(
                 reply=reply,
                 source="gemini",
