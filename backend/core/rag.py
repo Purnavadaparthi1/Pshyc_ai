@@ -33,7 +33,8 @@ class RAGPipeline:
         return cls._instance
 
     def query(self, question: str, top_k: int | None = None) -> dict:
-        # Hybrid query: boost keywords for Freud's model
+        import time
+        t0 = time.perf_counter()
         keyword_boost = "id ego superego structural model personality explanation"
         hybrid_query = f"{keyword_boost} {question}"
         k = top_k or settings.RAG_TOP_K
@@ -41,13 +42,21 @@ class RAGPipeline:
         if count == 0:
             return {"found": False, "context": "", "sources": [], "similarity": 0.0}
 
+        # Embedding timing
+        t1 = time.perf_counter()
         query_embedding = self.embedder.encode(hybrid_query).tolist()
+        t2 = time.perf_counter()
+        logger.info(f"TIMING: Embedding: {t2-t1:.2f}s")
 
+        # Retrieval timing
+        t3 = time.perf_counter()
         results = self.collection.query(
             query_embeddings=[query_embedding],
             n_results=min(k, count),
             include=["documents", "distances", "metadatas"],
         )
+        t4 = time.perf_counter()
+        logger.info(f"TIMING: Retrieval: {t4-t3:.2f}s")
 
         if not results["documents"] or not results["documents"][0]:
             return {"found": False, "context": "", "sources": [], "similarity": 0.0}
@@ -58,8 +67,8 @@ class RAGPipeline:
         distances = results["distances"][0]
         doc_tuples = list(zip(docs, metadatas, distances))
         doc_tuples.sort(key=lambda x: x[2])  # sort by distance ascending
-        # Take best 3 for context
-        top_docs = doc_tuples[:3]
+        # Take best 3 for context (configurable)
+        top_docs = doc_tuples[:k]
 
         import re
         def clean_text(text):
@@ -73,43 +82,13 @@ class RAGPipeline:
 
         context_parts = []
         sources = set()
-        # Collect topic/subtopic from the best match
-        if top_docs:
-            best_meta = top_docs[0][1]
-            best_topic = best_meta.get("topic")
-            best_unit = best_meta.get("unit")
-            best_subtopic = best_meta.get("subtopic")
-        else:
-            best_topic = best_unit = best_subtopic = None
-
-        # Aggregate all chunks from the same topic/subtopic if context is too short
-        context_min_lines = 15
         for doc, meta, _ in top_docs:
             cleaned = clean_text(doc)
             context_parts.append(cleaned)
             sources.add(meta.get("source", "IGNOU Material"))
 
-        context = " ".join(context_parts)
-        # If context is too short, fetch more from same topic/subtopic
-        if len(context.splitlines()) < context_min_lines and best_topic:
-            # Query all docs with same topic/subtopic
-            filter_query = {"topic": best_topic}
-            if best_unit:
-                filter_query["unit"] = best_unit
-            if best_subtopic:
-                filter_query["subtopic"] = best_subtopic
-            extra_results = self.collection.get(where=filter_query, include=["documents", "metadatas"])
-            extra_docs = extra_results.get("documents", [])
-            extra_metas = extra_results.get("metadatas", [])
-            # Flatten and clean
-            extra_contexts = []
-            for doclist in extra_docs:
-                for doc in doclist:
-                    cleaned = clean_text(doc)
-                    if cleaned not in context_parts:
-                        extra_contexts.append(cleaned)
-            if extra_contexts:
-                context += "\n" + "\n".join(extra_contexts)
+        # Minimize context sent to Gemini (truncate to 1000 chars)
+        context = " ".join(context_parts)[:1000]
 
         best_similarity = 1.0 - top_docs[0][2] if top_docs else 0.0
 
