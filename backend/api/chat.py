@@ -8,6 +8,12 @@ from core.agent import GeminiAgent
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
 
+def is_greeting(msg: str) -> bool:
+    msg = msg.lower().strip()
+    return any(word in msg for word in [
+        "hi", "hello", "hey", "hii",
+        "good morning", "good afternoon",  "good evening", "how are you"
+    ])
 
 # ── Request / Response models ──────────────────────────────────────────────
 
@@ -55,19 +61,33 @@ async def chat(req: ChatRequest):
     history = [m.model_dump() for m in req.history]
 
     try:
+        agent = GeminiAgent.get_instance()
+
+        # NEW: Greeting handling
+        if is_greeting(req.message):
+            reply = await agent.generate_fallback_response(
+                message=req.message,
+                history=history,
+            )
+            return ChatResponse(
+                reply=reply,
+                source="gemini",
+                rag_sources=[],
+                rag_similarity=0.0,
+            )
+
+        # ── Step 1: RAG retrieval ──────────────────────────
         rag = RAGPipeline.get_instance()
         t1 = time.perf_counter()
         rag_result = rag.query(req.message)
         t2 = time.perf_counter()
-
-        agent = GeminiAgent.get_instance()
 
         if rag_result["found"]:
             logger.info(
                 f"RAG hit (similarity={rag_result['similarity']:.3f}) — "
                 f"sources: {rag_result['sources']}"
             )
-            # Step 2: RAG-grounded response via Gemini
+
             t3 = time.perf_counter()
             reply = await agent.generate_rag_response(
                 message=req.message,
@@ -76,7 +96,9 @@ async def chat(req: ChatRequest):
                 history=history,
             )
             t4 = time.perf_counter()
+
             print("LLM RESPONSE:", reply)
+
             if GeminiAgent.is_insufficient_context(reply):
                 logger.info("LLM indicated insufficient context, using Gemini fallback.")
                 try:
@@ -84,47 +106,59 @@ async def chat(req: ChatRequest):
                         message=req.message,
                         history=history,
                     )
-                    print("GEMINI FALLBACK RESPONSE:", reply)
                     return ChatResponse(
                         reply=reply,
                         source="gemini",
                         rag_sources=rag_result["sources"],
                         rag_similarity=round(rag_result["similarity"], 3),
                     )
-                except Exception as exc:
-                    logger.exception("Error in Gemini fallback response")
-                    raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
-            # If context is sufficient, return immediately
-            logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini RAG: {t4-t3:.2f}s, Total: {t4-t0:.2f}s")
+                except Exception:
+                    raise HTTPException(
+                        status_code=500,
+                        detail="⚠️ I'm having trouble responding right now. Please try again."
+                    )
+
             return ChatResponse(
                 reply=reply,
                 source="rag",
                 rag_sources=rag_result["sources"],
                 rag_similarity=round(rag_result["similarity"], 3),
             )
+
         else:
-            logger.info(
-                f"RAG miss (similarity={rag_result['similarity']:.3f}) — "
-                "using Gemini agent fallback"
-            )
             try:
                 reply = await agent.generate_fallback_response(
                     message=req.message,
                     history=history,
                 )
-                print("LLM RESPONSE:", reply)
                 return ChatResponse(
                     reply=reply,
                     source="gemini",
                     rag_similarity=round(rag_result["similarity"], 3),
                 )
-            except Exception as exc:
-                logger.exception("Error in Gemini fallback response")
-                raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
+            except Exception:
+                raise HTTPException(
+                    status_code=500,
+                    detail="I'm having trouble responding right now. Please try again."
+                )
 
     except Exception as exc:
         logger.exception("Error in /api/chat")
-        raise HTTPException(status_code=500, detail=str(exc))
+
+        error_msg = str(exc).lower()
+
+        # Friendly quota error
+        if "quota" in error_msg or "429" in error_msg or "rate" in error_msg:
+            raise HTTPException(
+                status_code=429,
+                detail="I'm a bit busy right now. Please try again in a few seconds"
+            )
+
+        # Generic friendly error
+        raise HTTPException(
+            status_code=500,
+            detail="Something went wrong. Please try again later."
+        )
 
 
 @router.delete("/chat/session/{session_id}")

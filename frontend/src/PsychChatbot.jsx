@@ -214,11 +214,23 @@ export default function PsychChatbot() {
 
         setMessages((prev) => [...prev, aiMsg]);
       } catch (err) {
-        if (err.name === "AbortError") return;
-        setError(err.message || "Something went wrong. Please try again.");
-        setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-        setInput(userText); // restore input
-      } finally {
+  if (err.name === "AbortError") return;
+
+  let userFriendlyMessage = "Something went wrong. Please try again.";
+
+  if (
+    err.message?.toLowerCase().includes("quota") ||
+    err.message?.toLowerCase().includes("429") ||
+    err.message?.toLowerCase().includes("rate")
+  ) {
+    userFriendlyMessage = "I'm a bit busy right now. Please try again in a few seconds";
+  }
+
+  setError(userFriendlyMessage);
+
+  setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
+  setInput(userText);
+} finally {
         setLoading(false);
         inputRef.current?.focus();
       }
