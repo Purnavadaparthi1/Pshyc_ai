@@ -97,14 +97,17 @@ async def chat(req: ChatRequest):
         top_score = rag_result.get("similarity", 0.0)
 
         # 3-stage decision: high, medium, low confidence
-        if rag_result["found"] and top_score >= similarity_threshold:
-            # High confidence: use RAG answer
+        # Unified fallback logic: always use Gemini for insufficient or low RAG context
+        rag_confident = rag_result["found"] and top_score >= similarity_threshold
+        rag_medium = rag_result["found"] and top_score >= (similarity_threshold * 0.7)
+        use_rag = False
+        reply = None
+        if rag_confident or rag_medium:
+            # Try RAG answer first
             logger.info(
-                f"RAG hit (similarity={rag_result['similarity']:.3f}) — "
-                f"sources: {rag_result['sources']}"
+                f"RAG {'high' if rag_confident else 'medium'} confidence (similarity={rag_result['similarity']:.3f}) — using RAG+LLM reasoning"
             )
             t3 = time.perf_counter()
-            logger.info(f"Calling Gemini RAG response with message: {req.message}\nContext: {rag_result['context']}\nSources: {rag_result['sources']}")
             reply = await agent.generate_rag_response(
                 message=req.message,
                 context=rag_result["context"],
@@ -113,84 +116,35 @@ async def chat(req: ChatRequest):
             )
             t4 = time.perf_counter()
             logger.info(f"Gemini RAG response: {reply}")
-            if GeminiAgent.is_insufficient_context(reply, req.message):
-                logger.info("LLM indicated insufficient context, triggering Gemini fallback.")
-                try:
-                    logger.info(f"Calling Gemini fallback with message: {req.message}")
-                    fallback_reply = await agent.generate_fallback_response(
-                        message=req.message,
-                        history=history,
-                    )
-                    logger.info(f"Gemini fallback response: {fallback_reply}")
-                    fallback_reply = (
-                        f"**Note:** This answer is based on general knowledge, not from IGNOU material.\n\n"
-                        f"{fallback_reply}"
-                    )
-                    return ChatResponse(
-                        reply=fallback_reply,
-                        source="gemini",
-                        rag_sources=rag_result["sources"],
-                        rag_similarity=round(rag_result["similarity"], 3),
-                    )
-                except Exception as exc:
-                    logger.exception("Error in Gemini fallback response")
-                    raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
-            logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini RAG: {t4-t3:.2f}s, Total: {t4-t0:.2f}s")
-            return ChatResponse(
-                reply=reply,
-                source="rag",
-                rag_sources=rag_result["sources"],
-                rag_similarity=round(rag_result["similarity"], 3),
-            )
-        elif rag_result["found"] and top_score >= (similarity_threshold * 0.7):
-            # Medium confidence: use RAG+LLM reasoning (could be improved with reranking or hybrid)
-            logger.info(
-                f"RAG medium confidence (similarity={rag_result['similarity']:.3f}) — using RAG+LLM reasoning"
-            )
-            t3 = time.perf_counter()
-            reply = await agent.generate_rag_response(
-                message=req.message,
-                context=rag_result["context"],
-                sources=rag_result["sources"],
-                history=history,
-            )
-            t4 = time.perf_counter()
-            logger.info(f"Gemini RAG+LLM response: {reply}")
-            # Add a disclaimer for medium confidence
-            reply = (
-                f"**Note:** This answer is based on partial matches from IGNOU material and general knowledge.\n\n"
-                f"{reply}"
-            )
-            return ChatResponse(
-                reply=reply,
-                source="rag",
-                rag_sources=rag_result["sources"],
-                rag_similarity=round(rag_result["similarity"], 3),
-            )
-        else:
-            # Low confidence: fallback to Gemini with disclaimer
-            logger.info(
-                f"RAG miss or low similarity (similarity={rag_result['similarity']:.3f}) — using Gemini agent fallback"
-            )
+            # If RAG answer is insufficient, fallback to Gemini direct answer
+            if not GeminiAgent.is_insufficient_context(reply, req.message):
+                use_rag = True
+        if not use_rag:
+            # Always use Gemini fallback for insufficient or low RAG context
+            logger.info("Using Gemini fallback for insufficient or low RAG context.")
             try:
-                logger.info(f"Calling Gemini fallback with message: {req.message}")
+                # Always request a concise, strong answer
                 fallback_reply = await agent.generate_fallback_response(
-                    message=req.message,
+                    message=f"(medium, strong, concise) {req.message}",
                     history=history,
                 )
                 logger.info(f"Gemini fallback response: {fallback_reply}")
-                fallback_reply = (
-                    f"**Note:** This answer is based on general knowledge, not from IGNOU material.\n\n"
-                    f"{fallback_reply}"
-                )
                 return ChatResponse(
                     reply=fallback_reply,
                     source="gemini",
-                    rag_similarity=round(rag_result["similarity"], 3),
+                    rag_sources=rag_result.get("sources", []),
+                    rag_similarity=round(rag_result.get("similarity", 0.0), 3),
                 )
             except Exception as exc:
                 logger.exception("Error in Gemini fallback response")
                 raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
+        logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini RAG: {t4-t3:.2f}s, Total: {t4-t0:.2f}s")
+        return ChatResponse(
+            reply=reply,
+            source="rag",
+            rag_sources=rag_result["sources"],
+            rag_similarity=round(rag_result["similarity"], 3),
+        )
 
     except Exception as exc:
         logger.exception("Error in /api/chat")
