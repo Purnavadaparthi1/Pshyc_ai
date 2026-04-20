@@ -3,7 +3,6 @@ import re as _re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-
 from core.rag import RAGPipeline
 from core.agent import GeminiAgent
 from core.config import settings
@@ -46,6 +45,21 @@ _GREETING_RE = _re.compile(
 )
 
 
+# ── Friendly error helper ──────────────────────────────────────────────────
+def _friendly_error(exc: Exception) -> str:
+    """Convert raw API/network exceptions into user-friendly messages."""
+    raw = str(exc)
+    if "429" in raw or "quota" in raw.lower() or "rate" in raw.lower():
+        return "We're getting a lot of questions right now! Please wait a few seconds and try again."
+    if "503" in raw or "unavailable" in raw.lower():
+        return "PSYCH.AI is temporarily unavailable. Please try again in a moment."
+    if "timeout" in raw.lower():
+        return "The request timed out — PSYCH.AI is thinking hard! Please try again."
+    if "network" in raw.lower() or "connection" in raw.lower():
+        return "Can't reach the server — please check your internet connection."
+    return "PSYCH.AI hit a server hiccup — please try again in a moment."
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/health", response_model=HealthResponse)
@@ -65,7 +79,6 @@ async def chat(req: ChatRequest):
     t0 = time.perf_counter()
     history = [m.model_dump() for m in req.history]
 
-
     try:
         # ── Greeting bypass: skip RAG for casual greetings ─────────────────
         if _GREETING_RE.match(req.message):
@@ -84,7 +97,7 @@ async def chat(req: ChatRequest):
                 )
             except Exception as exc:
                 logger.exception("Error in Gemini greeting response")
-                raise HTTPException(status_code=500, detail="Error in Gemini greeting: " + str(exc))
+                raise HTTPException(status_code=500, detail=_friendly_error(exc))
         # ── end greeting bypass ────────────────────────────────────────────
 
         rag = RAGPipeline.get_instance()
@@ -134,7 +147,7 @@ async def chat(req: ChatRequest):
                     )
                 except Exception as exc:
                     logger.exception("Error in Gemini fallback response")
-                    raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
+                    raise HTTPException(status_code=500, detail=_friendly_error(exc))
             logger.info(f"TIMING: RAG setup: {t1-t0:.2f}s, RAG query: {t2-t1:.2f}s, Gemini RAG: {t4-t3:.2f}s, Total: {t4-t0:.2f}s")
             return ChatResponse(
                 reply=reply,
@@ -143,20 +156,23 @@ async def chat(req: ChatRequest):
                 rag_similarity=round(rag_result["similarity"], 3),
             )
         elif rag_result["found"] and top_score >= (similarity_threshold * 0.7):
-            # Medium confidence: use RAG+LLM reasoning (could be improved with reranking or hybrid)
+            # Medium confidence: use RAG+LLM reasoning
             logger.info(
                 f"RAG medium confidence (similarity={rag_result['similarity']:.3f}) — using RAG+LLM reasoning"
             )
             t3 = time.perf_counter()
-            reply = await agent.generate_rag_response(
-                message=req.message,
-                context=rag_result["context"],
-                sources=rag_result["sources"],
-                history=history,
-            )
+            try:
+                reply = await agent.generate_rag_response(
+                    message=req.message,
+                    context=rag_result["context"],
+                    sources=rag_result["sources"],
+                    history=history,
+                )
+            except Exception as exc:
+                logger.exception("Error in Gemini RAG+LLM response")
+                raise HTTPException(status_code=500, detail=_friendly_error(exc))
             t4 = time.perf_counter()
             logger.info(f"Gemini RAG+LLM response: {reply}")
-            # Add a disclaimer for medium confidence
             reply = (
                 f"**Note:** This answer is based on partial matches from IGNOU material and general knowledge.\n\n"
                 f"{reply}"
@@ -190,11 +206,13 @@ async def chat(req: ChatRequest):
                 )
             except Exception as exc:
                 logger.exception("Error in Gemini fallback response")
-                raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
+                raise HTTPException(status_code=500, detail=_friendly_error(exc))
 
+    except HTTPException:
+        raise  # re-raise already-friendly HTTP exceptions as-is
     except Exception as exc:
         logger.exception("Error in /api/chat")
-        raise HTTPException(status_code=500, detail=str(exc))
+        raise HTTPException(status_code=500, detail=_friendly_error(exc))
 
 
 @router.delete("/chat/session/{session_id}")
