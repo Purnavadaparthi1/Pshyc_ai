@@ -25,10 +25,8 @@ IMPORTANT INSTRUCTIONS:
 - Rewrite the answer in clean structured format
 - Do NOT repeat irrelevant content
 - If the context is insufficient, say so and do not hallucinate
+- For greetings (hi, hello, hey, etc.), respond warmly and briefly — introduce yourself as PSYCH.AI, IGNOU's Psychology tutor, and invite the user to ask a question
 """
-
-
-
 
 
 class GeminiAgent:
@@ -278,7 +276,7 @@ Now generate a well-structured answer.
         logger = logging.getLogger(__name__)
         logger.info(f"[GeminiAgent] generate_fallback_response called with message: {message}")
         style = self._determine_response_style(message)
-        
+
         if style == "brief":
             fallback_prompt = f"Provide a brief answer to: {message}"
         elif style == "detailed":
@@ -303,7 +301,7 @@ Follow your teaching philosophy:
 • Use relatable analogies for abstract concepts
 • Encourage deep understanding over rote memorisation
 • End with a follow-up question"""
-        
+
         # Use the full history if provided, otherwise just the current message
         chat_history = self._build_chat_history(history or [])
         chat = self.model.start_chat(history=chat_history)
@@ -311,4 +309,3 @@ Follow your teaching philosophy:
         response = await self._retry_api_call(chat, fallback_prompt)
         logger.info(f"[GeminiAgent] Gemini fallback response: {response}")
         return response
-    

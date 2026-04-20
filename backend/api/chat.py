@@ -1,4 +1,5 @@
 import logging
+import re as _re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
@@ -35,6 +36,14 @@ class HealthResponse(BaseModel):
     model: str
 
 
+# ── Greeting detector ──────────────────────────────────────────────────────
+_GREETING_RE = _re.compile(
+    r"^\s*(hi|hello|hey|howdy|greetings|good\s*(morning|afternoon|evening|night)|"
+    r"what'?s up|sup|hiya|yo|namaste|helo|hii+|heyy+)\W*\s*$",
+    _re.IGNORECASE,
+)
+
+
 # ── Endpoints ──────────────────────────────────────────────────────────────
 
 @router.get("/health", response_model=HealthResponse)
@@ -55,6 +64,26 @@ async def chat(req: ChatRequest):
     history = [m.model_dump() for m in req.history]
 
     try:
+        # ── Greeting bypass: skip RAG for casual greetings ─────────────────
+        if _GREETING_RE.match(req.message):
+            logger.info("Greeting detected — skipping RAG, using Gemini directly.")
+            agent = GeminiAgent.get_instance()
+            try:
+                reply = await agent.generate_fallback_response(
+                    message=req.message,
+                    history=history,
+                )
+                return ChatResponse(
+                    reply=reply,
+                    source="gemini",
+                    rag_sources=[],
+                    rag_similarity=0.0,
+                )
+            except Exception as exc:
+                logger.exception("Error in Gemini greeting response")
+                raise HTTPException(status_code=500, detail="Error in Gemini greeting: " + str(exc))
+        # ── end greeting bypass ────────────────────────────────────────────
+
         rag = RAGPipeline.get_instance()
         t1 = time.perf_counter()
         rag_result = rag.query(req.message)

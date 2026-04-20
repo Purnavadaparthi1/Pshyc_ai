@@ -123,6 +123,24 @@ const SUGGESTED = [
   "What are the defence mechanisms in psychology?",
 ];
 
+// ── Friendly error message mapper ─────────────────────────────────────────
+function getFriendlyError(raw) {
+  const msg = raw || "";
+  if (msg.includes("500"))
+    return "PSYCH.AI hit a server hiccup — please try again in a moment.";
+  if (msg.includes("429") || msg.toLowerCase().includes("rate limit"))
+    return "We're getting a lot of questions right now! Please wait a few seconds and try again.";
+  if (msg.includes("Failed to fetch") || msg.includes("NetworkError") || msg.includes("network"))
+    return "Can't reach the server — please check your internet connection.";
+  if (msg.includes("4000") || msg.toLowerCase().includes("too long"))
+    return "Your message is too long. Please shorten it and try again.";
+  if (msg.includes("timeout") || msg.includes("Timeout"))
+    return "The request timed out — PSYCH.AI is thinking hard! Please try again.";
+  if (msg.includes("503") || msg.toLowerCase().includes("unavailable"))
+    return "PSYCH.AI is temporarily unavailable. Please try again in a moment.";
+  return "Something went wrong. Please try again.";
+}
+
 // ── Main Chatbot Component ────────────────────────────────────────────────
 export default function PsychChatbot() {
   const [messages, setMessages] = useState([
@@ -215,7 +233,9 @@ export default function PsychChatbot() {
         setMessages((prev) => [...prev, aiMsg]);
       } catch (err) {
         if (err.name === "AbortError") return;
-        setError(err.message || "Something went wrong. Please try again.");
+        // ── Friendly error messages ────────────────────────────────────
+        setError(getFriendlyError(err.message));
+        // ── end friendly error ─────────────────────────────────────────
         setMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
         setInput(userText); // restore input
       } finally {
