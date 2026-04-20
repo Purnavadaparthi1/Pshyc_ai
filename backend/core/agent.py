@@ -33,9 +33,36 @@ IMPORTANT INSTRUCTIONS:
 
 class GeminiAgent:
     @staticmethod
-    def is_insufficient_context(reply: str) -> bool:
-        """Detect if the LLM reply signals insufficient or irrelevant context using regex and partial/fuzzy matching."""
+    def is_insufficient_context(reply: str, question: str) -> bool:
+        """
+        Dynamically detect if the LLM reply is insufficient by checking semantic similarity
+        between the reply and the question. If the reply mostly repeats the question or does not
+        add new information, trigger fallback. This avoids hardcoding phrases.
+        """
+        import difflib
         import re
+        # Remove markdown and extra formatting for comparison
+        def clean(text):
+            text = re.sub(r"[#*\-]+", "", text)
+            text = re.sub(r"\s+", " ", text)
+            return text.strip().lower()
+
+        reply_clean = clean(reply)
+        question_clean = clean(question)
+
+        # If reply is very short or just repeats the question, fallback
+        if len(reply_clean) < 40:
+            logger.info("Fallback: Gemini reply too short to be a valid answer.")
+            return True
+
+        # If reply contains the question verbatim or is highly similar, fallback
+        seq = difflib.SequenceMatcher(None, reply_clean, question_clean)
+        similarity = seq.ratio()
+        if similarity > 0.7:
+            logger.info(f"Fallback: Gemini reply too similar to question (similarity={similarity:.2f}).")
+            return True
+
+        # If reply contains phrases indicating lack of info, fallback
         fallback_patterns = [
             r"insufficient(ly)? (provided )?context",
             r"not enough context",
@@ -54,11 +81,11 @@ class GeminiAgent:
             r"cannot answer (from|using|with) (the )?context",
             r"the context does not (contain|cover|provide|include|address)"
         ]
-        reply_lower = reply.lower()
         for pattern in fallback_patterns:
-            if re.search(pattern, reply_lower):
-                logger.info(f"Fallback triggered by pattern: '{pattern}' in reply: {reply_lower}")
+            if re.search(pattern, reply_clean):
+                logger.info(f"Fallback triggered by pattern: '{pattern}' in reply: {reply_clean}")
                 return True
+
         return False
 
     # Token management for rate limiting
@@ -183,6 +210,8 @@ class GeminiAgent:
         history: list[dict] | None = None,
     ) -> str:
         """Generate a response grounded in RAG-retrieved course material. Only one Gemini API call per user input."""
+        logger = logging.getLogger(__name__)
+        logger.info(f"[GeminiAgent] generate_rag_response called with message: {message}\nContext: {context}\nSources: {sources}")
         style = self._determine_response_style(message)
         if style == "brief":
             style_instruction = "Provide a concise summary (2-3 sentences) focusing on key points from the material."
@@ -235,8 +264,9 @@ Now generate a well-structured answer.
         # Use the full history if provided, otherwise just the current message
         chat_history = self._build_chat_history(history or [])
         chat = self.model.start_chat(history=chat_history)
-        # Only one Gemini API call per user input
+        logger.info(f"[GeminiAgent] Sending RAG prompt to Gemini: {rag_prompt}")
         response = await self._retry_api_call(chat, rag_prompt)
+        logger.info(f"[GeminiAgent] Gemini RAG response: {response}")
         return self.post_process(response)
 
     async def generate_fallback_response(
@@ -245,6 +275,8 @@ Now generate a well-structured answer.
         history: list[dict] | None = None,
     ) -> str:
         """Pure Gemini agent response — used when RAG finds no relevant material. Only one Gemini API call per user input."""
+        logger = logging.getLogger(__name__)
+        logger.info(f"[GeminiAgent] generate_fallback_response called with message: {message}")
         style = self._determine_response_style(message)
         
         if style == "brief":
@@ -275,6 +307,8 @@ Follow your teaching philosophy:
         # Use the full history if provided, otherwise just the current message
         chat_history = self._build_chat_history(history or [])
         chat = self.model.start_chat(history=chat_history)
-        # Only one Gemini API call per user input
-        return await self._retry_api_call(chat, fallback_prompt)
+        logger.info(f"[GeminiAgent] Sending fallback prompt to Gemini: {fallback_prompt}")
+        response = await self._retry_api_call(chat, fallback_prompt)
+        logger.info(f"[GeminiAgent] Gemini fallback response: {response}")
+        return response
     
