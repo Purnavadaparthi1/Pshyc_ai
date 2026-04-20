@@ -3,8 +3,10 @@ import re as _re
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
+
 from core.rag import RAGPipeline
 from core.agent import GeminiAgent
+from core.config import settings
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api", tags=["chat"])
@@ -63,6 +65,7 @@ async def chat(req: ChatRequest):
     t0 = time.perf_counter()
     history = [m.model_dump() for m in req.history]
 
+
     try:
         # ── Greeting bypass: skip RAG for casual greetings ─────────────────
         if _GREETING_RE.match(req.message):
@@ -90,8 +93,12 @@ async def chat(req: ChatRequest):
         t2 = time.perf_counter()
 
         agent = GeminiAgent.get_instance()
+        similarity_threshold = getattr(rag, 'similarity_threshold', None) or getattr(settings, 'RAG_SIMILARITY_THRESHOLD', 0.7)
+        top_score = rag_result.get("similarity", 0.0)
 
-        if rag_result["found"]:
+        # 3-stage decision: high, medium, low confidence
+        if rag_result["found"] and top_score >= similarity_threshold:
+            # High confidence: use RAG answer
             logger.info(
                 f"RAG hit (similarity={rag_result['similarity']:.3f}) — "
                 f"sources: {rag_result['sources']}"
@@ -110,13 +117,17 @@ async def chat(req: ChatRequest):
                 logger.info("LLM indicated insufficient context, triggering Gemini fallback.")
                 try:
                     logger.info(f"Calling Gemini fallback with message: {req.message}")
-                    reply = await agent.generate_fallback_response(
+                    fallback_reply = await agent.generate_fallback_response(
                         message=req.message,
                         history=history,
                     )
-                    logger.info(f"Gemini fallback response: {reply}")
+                    logger.info(f"Gemini fallback response: {fallback_reply}")
+                    fallback_reply = (
+                        f"**Note:** This answer is based on general knowledge, not from IGNOU material.\n\n"
+                        f"{fallback_reply}"
+                    )
                     return ChatResponse(
-                        reply=reply,
+                        reply=fallback_reply,
                         source="gemini",
                         rag_sources=rag_result["sources"],
                         rag_similarity=round(rag_result["similarity"], 3),
@@ -131,19 +142,49 @@ async def chat(req: ChatRequest):
                 rag_sources=rag_result["sources"],
                 rag_similarity=round(rag_result["similarity"], 3),
             )
-        else:
+        elif rag_result["found"] and top_score >= (similarity_threshold * 0.7):
+            # Medium confidence: use RAG+LLM reasoning (could be improved with reranking or hybrid)
             logger.info(
-                f"RAG miss (similarity={rag_result['similarity']:.3f}) — using Gemini agent fallback"
+                f"RAG medium confidence (similarity={rag_result['similarity']:.3f}) — using RAG+LLM reasoning"
+            )
+            t3 = time.perf_counter()
+            reply = await agent.generate_rag_response(
+                message=req.message,
+                context=rag_result["context"],
+                sources=rag_result["sources"],
+                history=history,
+            )
+            t4 = time.perf_counter()
+            logger.info(f"Gemini RAG+LLM response: {reply}")
+            # Add a disclaimer for medium confidence
+            reply = (
+                f"**Note:** This answer is based on partial matches from IGNOU material and general knowledge.\n\n"
+                f"{reply}"
+            )
+            return ChatResponse(
+                reply=reply,
+                source="rag",
+                rag_sources=rag_result["sources"],
+                rag_similarity=round(rag_result["similarity"], 3),
+            )
+        else:
+            # Low confidence: fallback to Gemini with disclaimer
+            logger.info(
+                f"RAG miss or low similarity (similarity={rag_result['similarity']:.3f}) — using Gemini agent fallback"
             )
             try:
                 logger.info(f"Calling Gemini fallback with message: {req.message}")
-                reply = await agent.generate_fallback_response(
+                fallback_reply = await agent.generate_fallback_response(
                     message=req.message,
                     history=history,
                 )
-                logger.info(f"Gemini fallback response: {reply}")
+                logger.info(f"Gemini fallback response: {fallback_reply}")
+                fallback_reply = (
+                    f"**Note:** This answer is based on general knowledge, not from IGNOU material.\n\n"
+                    f"{fallback_reply}"
+                )
                 return ChatResponse(
-                    reply=reply,
+                    reply=fallback_reply,
                     source="gemini",
                     rag_similarity=round(rag_result["similarity"], 3),
                 )
