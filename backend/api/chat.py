@@ -153,7 +153,7 @@ async def chat(req: ChatRequest):
             )
         except Exception as exc:
             logger.exception("Error in Gemini fallback response")
-            raise HTTPException(status_code=500, detail="Error in Gemini fallback: " + str(exc))
+            raise HTTPException(status_code=500, detail=_friendly_error(exc))
 
     except HTTPException:
         raise  # re-raise already-friendly HTTP exceptions as-is
