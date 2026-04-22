@@ -129,6 +129,7 @@ async def chat(req: ChatRequest):
             logger.info(f"Gemini RAG response: {reply}")
             if not GeminiAgent.is_insufficient_context(reply, req.message):
                 logger.info("RAG answer is sufficient and related. Returning RAG answer.")
+                # Do NOT append 'Source of Information' section for RAG answers
                 return ChatResponse(
                     reply=reply,
                     source="rag",
@@ -145,11 +146,26 @@ async def chat(req: ChatRequest):
                 history=history,
             )
             logger.info(f"Gemini fallback response: {fallback_reply}")
+            # Always append RAG sources (if any) for Gemini responses, for user confidence
+            rag_sources = rag_result.get("sources", [])
+            rag_similarity = round(rag_result.get("similarity", 0.0), 3)
+            if rag_sources:
+                formatted_sources = []
+                for src in rag_sources:
+                    if src.startswith("http://") or src.startswith("https://"):
+                        formatted_sources.append(f"[{src}]({src})")
+                    else:
+                        formatted_sources.append(src)
+                sources_md = "\n".join(f"- {s}" for s in formatted_sources)
+                platform_md = "\n\n**Source Platform:** IGNOU Material (retrieved via PSYCH.AI RAG)"
+                fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\n{sources_md}{platform_md}"
+            else:
+                fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\nNo relevant IGNOU document matched your query, so this answer is based on general psychology knowledge."
             return ChatResponse(
                 reply=fallback_reply,
                 source="gemini",
-                rag_sources=rag_result.get("sources", []),
-                rag_similarity=round(rag_result.get("similarity", 0.0), 3),
+                rag_sources=rag_sources,
+                rag_similarity=rag_similarity,
             )
         except Exception as exc:
             logger.exception("Error in Gemini fallback response")
