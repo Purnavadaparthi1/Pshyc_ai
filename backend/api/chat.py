@@ -128,8 +128,7 @@ async def chat(req: ChatRequest):
             t4 = time.perf_counter()
             logger.info(f"Gemini RAG response: {reply}")
             if not GeminiAgent.is_insufficient_context(reply, req.message):
-                logger.info("RAG answer is sufficient and related. Returning RAG answer.")
-                # Do NOT append 'Source of Information' section for RAG answers
+                logger.info("[RESPONSE TYPE] RAG answer (structured by Gemini, but content from RAG). Returning as 'rag'.")
                 return ChatResponse(
                     reply=reply,
                     source="rag",
@@ -137,7 +136,7 @@ async def chat(req: ChatRequest):
                     rag_similarity=round(rag_result["similarity"], 3),
                 )
             else:
-                logger.info("RAG answer insufficient or not related. Falling back to Gemini.")
+                logger.info("[RESPONSE TYPE] RAG insufficient, falling back to Gemini. Will return as 'gemini'.")
         # Always fallback to Gemini if not high confidence or insufficient RAG answer
         try:
             logger.info(f"Calling Gemini fallback with message: {req.message}")
@@ -146,10 +145,12 @@ async def chat(req: ChatRequest):
                 history=history,
             )
             logger.info(f"Gemini fallback response: {fallback_reply}")
-            # Always append RAG sources (if any) for Gemini responses, for user confidence
+            logger.info("[RESPONSE TYPE] Gemini fallback (no sufficient RAG context, Gemini answered directly). Returning as 'gemini'.")
+            # Only show RAG sources if similarity is above threshold (e.g., 0.6)
             rag_sources = rag_result.get("sources", [])
             rag_similarity = round(rag_result.get("similarity", 0.0), 3)
-            if rag_sources:
+            SIMILARITY_THRESHOLD = 0.6
+            if rag_sources and rag_similarity >= SIMILARITY_THRESHOLD:
                 formatted_sources = []
                 for src in rag_sources:
                     if src.startswith("http://") or src.startswith("https://"):

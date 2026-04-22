@@ -95,7 +95,8 @@ function MessageBubble({ msg }) {
             dangerouslySetInnerHTML={{ __html: renderMarkdown(msg.content) }}
           />
         )}
-        {!isUser && msg.source && (
+        {/* Only show SourceBadge for Gemini answers, never for RAG */}
+        {!isUser && msg.source === "gemini" && (
           <SourceBadge
             source={msg.source}
             sources={msg.rag_sources}
