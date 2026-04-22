@@ -151,15 +151,20 @@ async def chat(req: ChatRequest):
             rag_similarity = round(rag_result.get("similarity", 0.0), 3)
             SIMILARITY_THRESHOLD = 0.6
             if rag_sources and rag_similarity >= SIMILARITY_THRESHOLD:
+                # Exclude any sources that contain 'Unit-' or 'Unit '
+                filtered_sources = [src for src in rag_sources if not ("Unit-" in src or "Unit " in src)]
                 formatted_sources = []
-                for src in rag_sources:
+                for src in filtered_sources:
                     if src.startswith("http://") or src.startswith("https://"):
                         formatted_sources.append(f"[{src}]({src})")
                     else:
                         formatted_sources.append(src)
-                sources_md = "\n".join(f"- {s}" for s in formatted_sources)
-                platform_md = "\n\n**Source Platform:** IGNOU Material (retrieved via PSYCH.AI RAG)"
-                fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\n{sources_md}{platform_md}"
+                if formatted_sources:
+                    sources_md = "\n".join(f"- {s}" for s in formatted_sources)
+                    platform_md = "\n\n**Source Platform:** IGNOU Material (retrieved via PSYCH.AI RAG)"
+                    fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\n{sources_md}{platform_md}"
+                else:
+                    fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\nNo relevant IGNOU document matched your query. This answer is based on general psychology knowledge, including standard psychology textbooks, peer-reviewed articles, reputable psychology websites, and classic case studies."
             else:
                 fallback_reply = (
                     f"{fallback_reply}\n\n---\n\n## Source of Information\n\n"
