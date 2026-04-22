@@ -161,7 +161,10 @@ async def chat(req: ChatRequest):
                 platform_md = "\n\n**Source Platform:** IGNOU Material (retrieved via PSYCH.AI RAG)"
                 fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\n{sources_md}{platform_md}"
             else:
-                fallback_reply = f"{fallback_reply}\n\n---\n\n## Source of Information\n\nNo relevant IGNOU document matched your query, so this answer is based on general psychology knowledge."
+                fallback_reply = (
+                    f"{fallback_reply}\n\n---\n\n## Source of Information\n\n"
+                    "No relevant IGNOU document matched your query. This answer is based on general psychology knowledge, including standard psychology textbooks, peer-reviewed articles, reputable psychology websites, and classic case studies."
+                )
             return ChatResponse(
                 reply=fallback_reply,
                 source="gemini",
