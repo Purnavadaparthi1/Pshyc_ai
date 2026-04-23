@@ -105,14 +105,16 @@ async def chat(req: ChatRequest):
         rag_result = rag.query(req.message)
         t2 = time.perf_counter()
 
+        # Debug: Log the full RAG result for diagnosis
+        logger.info(f"RAG result for message '{req.message}': {rag_result}")
+
         agent = GeminiAgent.get_instance()
-        similarity_threshold = getattr(rag, 'similarity_threshold', None) or getattr(settings, 'RAG_SIMILARITY_THRESHOLD', 0.7)
+        similarity_threshold = 0.6  # Always use 0.6 as requested
         top_score = rag_result.get("similarity", 0.0)
 
-        # 3-stage decision: high, medium, low confidence
-        # Unified fallback logic: always use Gemini for insufficient or low RAG context
-        # Strict fallback: Only use RAG if answer is sufficient and related, otherwise always use Gemini
-        rag_confident = rag_result["found"] and top_score >= similarity_threshold
+        logger.info(f"RAG similarity score: {top_score:.3f} (threshold: {similarity_threshold})")
+
+        rag_confident = rag_result.get("found", False) and top_score >= similarity_threshold
         reply = None
         if rag_confident:
             logger.info(
@@ -137,6 +139,7 @@ async def chat(req: ChatRequest):
                 )
             else:
                 logger.info("[RESPONSE TYPE] RAG insufficient, falling back to Gemini. Will return as 'gemini'.")
+
         # Always fallback to Gemini if not high confidence or insufficient RAG answer
         try:
             logger.info(f"Calling Gemini fallback with message: {req.message}")
