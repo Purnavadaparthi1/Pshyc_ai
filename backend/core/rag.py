@@ -35,7 +35,14 @@ class RAGPipeline:
     def query(self, question: str, top_k: int | None = None) -> dict:
         import time
         t0 = time.perf_counter()
-        keyword_boost = "id ego superego structural model personality explanation"
+        # Dynamically adjust keyword_boost for syllabus/curriculum queries
+        syllabus_keywords = [
+            "syllabus", "curriculum", "course outline", "program structure", "course structure", "units", "blocks", "IGNOU syllabus"
+        ]
+        if any(kw in question.lower() for kw in syllabus_keywords):
+            keyword_boost = "syllabus curriculum course outline program structure units blocks IGNOU syllabus"
+        else:
+            keyword_boost = "id ego superego structural model personality explanation"
         hybrid_query = f"{keyword_boost} {question}"
         k = top_k or settings.RAG_TOP_K
         count = self.collection.count()
